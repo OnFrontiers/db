@@ -47,6 +47,9 @@ type database struct {
 
 	connURL db.ConnectionURL
 	mu      sync.Mutex
+
+	primaryKeys    map[string][]string
+	primaryKeysMux *sync.Mutex
 }
 
 var (
@@ -58,6 +61,8 @@ var (
 func newDatabase(settings db.ConnectionURL) *database {
 	return &database{
 		connURL: settings,
+		primaryKeys:    make(map[string][]string),
+		primaryKeysMux: &sync.Mutex{},
 	}
 }
 
@@ -136,6 +141,8 @@ func (d *database) open() error {
 // Clone creates a copy of the database session on the given context.
 func (d *database) clone(ctx context.Context, checkConn bool) (*database, error) {
 	clone := newDatabase(d.connURL)
+	clone.primaryKeys = d.primaryKeys
+	clone.primaryKeysMux = d.primaryKeysMux
 
 	var err error
 	clone.BaseDatabase, err = d.NewClone(clone, checkConn)
@@ -249,6 +256,12 @@ func (d *database) TableExists(name string) error {
 
 // PrimaryKeys returns the names of all the primary keys on the table.
 func (d *database) PrimaryKeys(tableName string) ([]string, error) {
+	d.primaryKeysMux.Lock()
+	if pk, ok := d.primaryKeys[tableName]; ok {
+		d.primaryKeysMux.Unlock()
+		return pk, nil
+	}
+
 	q := d.Select("k.column_name").
 		From("information_schema.table_constraints AS t").
 		Join("information_schema.key_column_usage AS k").
@@ -272,6 +285,9 @@ func (d *database) PrimaryKeys(tableName string) ([]string, error) {
 		}
 		pk = append(pk, k)
 	}
+
+	d.primaryKeys[tableName] = pk
+	d.primaryKeysMux.Unlock()
 
 	return pk, nil
 }
